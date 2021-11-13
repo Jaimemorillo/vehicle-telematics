@@ -2,6 +2,7 @@ package org.cloud.vehicletelematics;
 
 import org.apache.flink.api.common.functions.FilterFunction;
 import org.apache.flink.api.common.functions.MapFunction;
+import org.apache.flink.api.common.functions.ReduceFunction;
 import org.apache.flink.api.java.ExecutionEnvironment;
 import org.apache.flink.api.java.operators.DataSource;
 import org.apache.flink.api.java.tuple.Tuple6;
@@ -10,6 +11,8 @@ import org.apache.flink.core.fs.FileSystem;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+
+// https://nightlies.apache.org/flink/flink-docs-release-1.14/docs/dev/datastream/operators/overview/
 
 public class Main {
     public static void main(String[] args) throws Exception {
@@ -24,6 +27,16 @@ public class Main {
         //CsvReader csvFile = env.readCsvFile(inFilePath);
         DataStream<String> dataStream = env.readTextFile(inFilePath);
 
+        int Time = 0;
+        int VID = 1;
+        int Spd = 2;
+        int XWay = 3;
+        int Lane = 4;
+        int Dir = 5;
+        int Seg = 6;
+        int Pos = 7;
+
+        // DataStream to Tuple
         SingleOutputStreamOperator<Tuple8<Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer>> dataStreamTuple = dataStream.map(
                 new MapFunction<String, Tuple8<Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer>>() {
             @Override
@@ -41,17 +54,48 @@ public class Main {
             }
         });
 
-        SingleOutputStreamOperator<Tuple8<Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer>> dataStreamFilter = dataStreamTuple.filter(new FilterFunction<Tuple8<Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer>>() {
+        // SpeedRadar
+        SingleOutputStreamOperator<Tuple8<Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer>> dataStreamFilter =
+                dataStreamTuple.filter(new FilterFunction<Tuple8<Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer>>() {
             @Override
             public boolean filter(Tuple8<Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer> in) throws Exception {
                 return in.f2 > 90; }
         });
 
-        DataStream<Tuple6<Integer, Integer, Integer, Integer, Integer, Integer>> dataStreamOut = dataStreamFilter.project(0,1,3,6,5,2);
+        DataStream<Tuple6<Integer, Integer, Integer, Integer, Integer, Integer>> dataStreamOut =
+                dataStreamFilter.project(Time,VID,XWay,Seg,Dir,Spd);
 
-        env.setParallelism(1);
-        dataStreamOut.writeAsCsv(outFilePath, FileSystem.WriteMode.OVERWRITE);
-        //dataStreamOut.print();
+        // AverageSpeedControl
+        SingleOutputStreamOperator<Tuple8<Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer>> segments5256 =
+                dataStreamTuple.filter(new FilterFunction<Tuple8<Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer>>() {
+            @Override
+            public boolean filter(Tuple8<Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer> in) throws Exception {
+                return in.f6 == 52 | in.f6 == 56; }
+        });
+        DataStream<Tuple6<Integer, Integer, Integer, Integer, Integer, Integer>> segments =
+                segments5256.project(Time,VID,XWay,Dir,Seg,Pos);
+
+
+        /* segments.keyBy(value -> value.f1).reduce(new ReduceFunction<Tuple6<Integer, Integer, Integer, Integer, Integer, Integer>>() {
+            @Override
+            public Tuple6<Integer, Integer, Integer, Integer, Integer, Integer> reduce(Tuple6<Integer, Integer, Integer, Integer, Integer, Integer> value1, Tuple6<Integer, Integer, Integer, Integer, Integer, Integer> value2)
+                    throws Exception {
+                Tuple6<Integer, Integer, Integer, Integer, Integer, Integer> out = new Tuple6<Integer, Integer, Integer, Integer, Integer, Integer>(value2.f0, value1.f1, value1.f2+value2.f2);
+                return out;
+            }
+        });
+            }
+        }); */
+
+
+        // Tener en cuenta la dirección para el calculo de los metros (Dir y Pos)
+
+
+        segments5256.print();
+
+        // Write output
+        //env.setParallelism(1);
+        //dataStreamOut.writeAsCsv(outFilePath, FileSystem.WriteMode.OVERWRITE);
 
         try {
             env.execute("Vehicule Telematics");
