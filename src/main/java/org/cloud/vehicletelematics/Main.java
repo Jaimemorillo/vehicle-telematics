@@ -3,7 +3,6 @@ package org.cloud.vehicletelematics;
 import org.apache.flink.api.common.functions.FilterFunction;
 import org.apache.flink.api.common.functions.MapFunction;
 import org.apache.flink.api.java.functions.KeySelector;
-import org.apache.flink.api.java.tuple.Tuple;
 import org.apache.flink.api.java.tuple.Tuple3;
 import org.apache.flink.api.java.tuple.Tuple6;
 import org.apache.flink.api.java.tuple.Tuple8;
@@ -69,6 +68,7 @@ public class Main {
         /////////// SpeedRadar ////////////
         ///////////////////////////////////
 
+        // Filter reports with more than 90 mph
         SingleOutputStreamOperator<Tuple8<Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer>> dataStreamFilter =
                 dataStreamTuple.filter(new FilterFunction<Tuple8<Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer>>() {
             @Override
@@ -77,49 +77,48 @@ public class Main {
         });
 
         //Select output in order
-        DataStream<Tuple6<Integer, Integer, Integer, Integer, Integer, Integer>> dataStreamOut =
+        DataStream<Tuple6<Integer, Integer, Integer, Integer, Integer, Integer>> dataStreamOutSpeedRadar =
                 dataStreamFilter.project(Timestamp,VID,XWay,Seg,Dir,Spd);
-
 
         ///////////////////////////////////
         /////// AverageSpeedControl ///////
         ///////////////////////////////////
 
-        // MaxBy va iterando por el datastream y pinta el registro máximo encontrado hasta ese momento,
-        // max pinta el primer regirstro siempre con el maximo valor encontrado
-        //https://stackoverflow.com/questions/57932282/whats-the-practical-use-of-keyedstreammax
-
-        // Filter reports in segment 52 and 56
+        // Filter reports inside segments 52 and 56
         SingleOutputStreamOperator<Tuple8<Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer>> segment5256Ini =
                 dataStreamTuple.filter(new FilterFunction<Tuple8<Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer>>() {
             @Override
             public boolean filter(Tuple8<Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer> in) throws Exception {
                 return in.f6 >= 52 && in.f6 <= 56;}
         });
+
+        // Select useful variables
         DataStream<Tuple6<Integer, Integer, Integer, Integer, Integer, Integer>> segments5256 =
                 segment5256Ini.project(Timestamp,VID,XWay,Dir,Seg,Pos);
 
-        // Create the key
+        // Create the key taking into account VID, XWay and Dir; Generate timestamps and watermarks
         KeyedStream<Tuple6<Integer, Integer, Integer, Integer, Integer, Integer>, Tuple3<Integer, Integer, Integer>> keyedStreamSegments5256 =
                 segments5256.assignTimestampsAndWatermarks(new AscendingTimestampExtractor<Tuple6<Integer, Integer, Integer, Integer, Integer, Integer>>(){
-            @Override
-            public long extractAscendingTimestamp(Tuple6<Integer, Integer, Integer, Integer, Integer, Integer> element) {
-                return element.f0*1000;
-            }
-        }).keyBy(new KeySelector<Tuple6<Integer, Integer, Integer, Integer, Integer, Integer>, Tuple3<Integer, Integer, Integer>>() {
+                    @Override
+                    public long extractAscendingTimestamp(Tuple6<Integer, Integer, Integer, Integer, Integer, Integer> element) {
+                        return element.f0*1000;
+                    }
+                }).keyBy(new KeySelector<Tuple6<Integer, Integer, Integer, Integer, Integer, Integer>, Tuple3<Integer, Integer, Integer>>() {
                     @Override
                     public Tuple3<Integer, Integer, Integer> getKey(Tuple6<Integer, Integer, Integer, Integer, Integer, Integer> value) throws Exception {
                         return Tuple3.of(value.f1, value.f2, value.f3);
                     }
                 });
 
-        // Window function
+        // Custom window function for average speed
         class AverageSpeed implements WindowFunction<Tuple6<Integer, Integer, Integer, Integer, Integer, Integer>,
                 Tuple6<Integer, Integer, Integer, Integer, Integer, Double>,
                 Tuple3<Integer, Integer, Integer>,
                 TimeWindow> {
             @Override
-            public void apply(Tuple3<Integer, Integer, Integer> key, TimeWindow window, Iterable<Tuple6<Integer, Integer, Integer, Integer, Integer, Integer>> input,
+            public void apply(Tuple3<Integer, Integer, Integer> key,
+                              TimeWindow window,
+                              Iterable<Tuple6<Integer, Integer, Integer, Integer, Integer, Integer>> input,
                               Collector<Tuple6<Integer, Integer, Integer, Integer, Integer, Double>> out) throws Exception {
 
                 Iterator<Tuple6<Integer, Integer, Integer, Integer, Integer, Integer>> iterator = input.iterator();
@@ -131,6 +130,7 @@ public class Main {
                 int segMin = 999;
                 int segMax = 0;
 
+                // Min Position (closest to west), Max Position (closest to east), Min Time (start), Max Time (end), Min Segment and Max Segment
                 while(iterator.hasNext()){
                     Tuple6<Integer, Integer, Integer, Integer, Integer, Integer> next = iterator.next();
                     int ntime = next.f0;
@@ -157,6 +157,7 @@ public class Main {
                     }
                 }
 
+                // If the car passes through the segments 52 and 56 get the average speed (distance/time)
                 if (segMin == 52 && segMax==56) {
                     double speedMs = (float)(posMax - posMin) / (timeMax - timeMin);
                     double speedMhp = 2.23694 * speedMs;
@@ -169,7 +170,7 @@ public class Main {
         }
 
         // Apply windows
-        SingleOutputStreamOperator<Tuple6<Integer, Integer, Integer, Integer, Integer, Double>> averageSpeed =
+        SingleOutputStreamOperator<Tuple6<Integer, Integer, Integer, Integer, Integer, Double>> dataStreamOutAverageSpeed =
                 keyedStreamSegments5256
                         .window(EventTimeSessionWindows.withGap(Time.seconds(91)))
                         .apply(new AverageSpeed());
@@ -183,7 +184,7 @@ public class Main {
                 });
 
         SingleOutputStreamOperator<Tuple6<Integer, Integer, Integer, Integer, Integer, Double>> averageSpeedF =
-                averageSpeed.filter(new FilterFunction<Tuple6<Integer, Integer, Integer, Integer, Integer, Double>>() {
+                dataStreamOutAverageSpeed.filter(new FilterFunction<Tuple6<Integer, Integer, Integer, Integer, Integer, Double>>() {
                     @Override
                     public boolean filter(Tuple6<Integer, Integer, Integer, Integer, Integer, Double> in) throws Exception {
                         return in.f2 == 196144; }
@@ -191,9 +192,9 @@ public class Main {
 
         //segmentsF.print();
 
-        // Write output
+        // Write outputs
         env.setParallelism(1);
-        averageSpeed.writeAsCsv(outFilePath, FileSystem.WriteMode.OVERWRITE);
+        dataStreamOutAverageSpeed.writeAsCsv(outFilePath, FileSystem.WriteMode.OVERWRITE);
 
         try {
             env.execute("Vehicule Telematics");
