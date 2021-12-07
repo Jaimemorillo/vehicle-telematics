@@ -3,9 +3,7 @@ package org.cloud.vehicletelematics;
 import org.apache.flink.api.common.functions.FilterFunction;
 import org.apache.flink.api.common.functions.MapFunction;
 import org.apache.flink.api.java.functions.KeySelector;
-import org.apache.flink.api.java.tuple.Tuple3;
-import org.apache.flink.api.java.tuple.Tuple6;
-import org.apache.flink.api.java.tuple.Tuple8;
+import org.apache.flink.api.java.tuple.*;
 import org.apache.flink.core.fs.FileSystem;
 import org.apache.flink.streaming.api.TimeCharacteristic;
 import org.apache.flink.streaming.api.datastream.DataStream;
@@ -16,6 +14,7 @@ import org.apache.flink.streaming.api.functions.timestamps.AscendingTimestampExt
 import org.apache.flink.streaming.api.functions.windowing.WindowFunction;
 import org.apache.flink.streaming.api.windowing.assigners.EventTimeSessionWindows;
 import org.apache.flink.streaming.api.windowing.time.Time;
+import org.apache.flink.streaming.api.windowing.windows.GlobalWindow;
 import org.apache.flink.streaming.api.windowing.windows.TimeWindow;
 import org.apache.flink.util.Collector;
 import java.util.Iterator;
@@ -34,8 +33,7 @@ public class Main {
         //System.out.println("Working Directory = " + System.getProperty("user.dir"));
 
         String inFilePath = "./data/sample-traffic-3xways.csv";
-        String outFilePath = "./data/average_2.csv";
-        //CsvReader csvFile = env.readCsvFile(inFilePath);
+        String outFilePath = "./data/accident.csv";
         DataStream<String> dataStream = env.readTextFile(inFilePath);
 
         int Timestamp = 0;
@@ -174,15 +172,102 @@ public class Main {
         // Get all the reports for each car inside a Windows and apply the function
         SingleOutputStreamOperator<Tuple6<Integer, Integer, Integer, Integer, Integer, Double>> dataStreamOutAverageSpeed =
                 keyedStreamSegments5256
-                        .window(EventTimeSessionWindows.withGap(Time.seconds(120)))
+                        .window(EventTimeSessionWindows.withGap(Time.seconds(120))) //Wait 120s max between reports
                         .apply(new AverageSpeed());
 
+        ///////////////////////////////////
+        /////// AccidentReporter //////////
+        ///////////////////////////////////
+
+        DataStream<String> dataStream2 = env.readTextFile(inFilePath).setParallelism(1);
+        // DataStream to Tuple
+        SingleOutputStreamOperator<Tuple8<Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer>> dataStreamTuple2 = dataStream2.map(
+                new MapFunction<String, Tuple8<Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer>>() {
+                    @Override
+                    public Tuple8<Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer> map(String in) throws Exception {
+                        String[] fieldArray = in.split(",");
+                        Tuple8<Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer> out =
+                                new Tuple8(Integer.parseInt(fieldArray[0]),
+                                        Integer.parseInt(fieldArray[1]),
+                                        Integer.parseInt(fieldArray[2]),
+                                        Integer.parseInt(fieldArray[3]),
+                                        Integer.parseInt(fieldArray[4]),
+                                        Integer.parseInt(fieldArray[5]),
+                                        Integer.parseInt(fieldArray[6]),
+                                        Integer.parseInt(fieldArray[7]));
+                        return out;
+                    }
+                }).setParallelism(1);
+
+        // Filter stopped cars
+        SingleOutputStreamOperator<Tuple8<Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer>> stoppedCarsIni =
+                dataStreamTuple2.filter(new FilterFunction<Tuple8<Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer>>() {
+                    @Override
+                    public boolean filter(Tuple8<Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer> in) throws Exception {
+                        return in.f2==0;}
+                });
+
+        // Select useful variables
+        SingleOutputStreamOperator<Tuple6<Integer, Integer, Integer, Integer, Integer, Integer>> stoppedCars =
+                stoppedCarsIni.project(Timestamp,VID,XWay,Dir,Seg,Pos);
+
+        // Create the key taking into account VID, XWay, Dir, Seg and Pos; Generate timestamps and watermarks
+        KeyedStream<Tuple6<Integer, Integer, Integer, Integer, Integer, Integer>, Tuple5<Integer,Integer,Integer,Integer,Integer>> keyedStreamstoppedCars =
+                stoppedCars.setParallelism(1).keyBy(new KeySelector<Tuple6<Integer, Integer, Integer, Integer, Integer, Integer>, Tuple5<Integer, Integer, Integer,Integer,Integer>>() {
+                    @Override
+                    public Tuple5<Integer, Integer, Integer, Integer, Integer> getKey(Tuple6<Integer, Integer, Integer, Integer, Integer, Integer> value) throws Exception {
+                        return Tuple5.of(value.f1,value.f2,value.f3,value.f4,value.f5);
+                    }
+                });
+
+        // Custom window function for average speed
+        class Accident implements WindowFunction<Tuple6<Integer, Integer, Integer, Integer, Integer, Integer>,
+                Tuple7<Integer, Integer, Integer, Integer, Integer, Integer, Integer>,
+                Tuple5<Integer, Integer, Integer, Integer, Integer>,
+                GlobalWindow> {
+            @Override
+            public void apply(Tuple5<Integer, Integer, Integer, Integer, Integer> key,
+                              GlobalWindow globalWindow,
+                              Iterable<Tuple6<Integer, Integer, Integer, Integer, Integer, Integer>> input,
+                              Collector<Tuple7<Integer, Integer, Integer, Integer, Integer, Integer, Integer>> out) throws Exception {
+
+                Iterator<Tuple6<Integer, Integer, Integer, Integer, Integer, Integer>> iterator = input.iterator();
+
+                int timeMin = 999999999;
+                int timeMax = 0;
+                int i = 0;
+
+                while(iterator.hasNext()){
+                    Tuple6<Integer, Integer, Integer, Integer, Integer, Integer> next = iterator.next();
+                    int ntime = next.f0;
+                    if (ntime <= timeMin){
+                        timeMin = ntime;
+                    }
+                    if (ntime>=timeMax){
+                        timeMax = ntime;
+                    }
+                    i++;
+                }
+
+                if (i==4) {
+                    out.collect(new Tuple7<Integer, Integer, Integer, Integer, Integer, Integer, Integer>
+                            (timeMin,timeMax,key.f0,key.f1,key.f3,key.f2,key.f4));
+                }
+            }
+        }
+
+        // Get all the reports inside windows of 4 elements with sliding and apply the function
+        SingleOutputStreamOperator<Tuple7<Integer, Integer, Integer, Integer, Integer, Integer, Integer>> dataStreamOutAccident =
+                keyedStreamstoppedCars
+                        .countWindow(4, 1)
+                        .apply(new Accident());
+
         // For checking cars
-        SingleOutputStreamOperator<Tuple6<Integer, Integer, Integer, Integer, Integer, Integer>> segmentsF =
-                segments5256.filter(new FilterFunction<Tuple6<Integer, Integer, Integer, Integer, Integer, Integer>>() {
+        SingleOutputStreamOperator<Tuple6<Integer, Integer, Integer, Integer, Integer, Integer>> dataStreamF =
+                stoppedCars.filter(new FilterFunction<Tuple6<Integer, Integer, Integer, Integer, Integer, Integer>>() {
                     @Override
                     public boolean filter(Tuple6<Integer, Integer, Integer, Integer, Integer, Integer> in) throws Exception {
-                        return in.f1 == 2213; }
+                        return in.f1 == 237579; }
                 });
 
         SingleOutputStreamOperator<Tuple6<Integer, Integer, Integer, Integer, Integer, Double>> averageSpeedF =
@@ -192,11 +277,12 @@ public class Main {
                         return in.f2 == 196144; }
                 });
 
-        //segmentsF.print();
+        //dataStreamOutAverageSpeed.print();
 
         // Write outputs
         env.setParallelism(1);
-        dataStreamOutAverageSpeed.writeAsCsv(outFilePath, FileSystem.WriteMode.OVERWRITE);
+        dataStreamOutAccident.writeAsCsv(outFilePath, FileSystem.WriteMode.OVERWRITE);
+
 
         try {
             env.execute("Vehicule Telematics");
