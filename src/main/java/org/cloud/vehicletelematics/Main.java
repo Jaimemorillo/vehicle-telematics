@@ -7,6 +7,7 @@ import org.apache.flink.api.java.tuple.Tuple3;
 import org.apache.flink.api.java.tuple.Tuple6;
 import org.apache.flink.api.java.tuple.Tuple8;
 import org.apache.flink.core.fs.FileSystem;
+import org.apache.flink.streaming.api.TimeCharacteristic;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.datastream.KeyedStream;
 import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
@@ -25,14 +26,15 @@ public class Main {
 
     public static void main(String[] args) throws Exception {
 
+        // Set up the execution environment
         final StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+        env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime);
 
-        // set up the execution environment
         //data/sample-traffic-3xways.csv
         //System.out.println("Working Directory = " + System.getProperty("user.dir"));
 
         String inFilePath = "./data/sample-traffic-3xways.csv";
-        String outFilePath = "./data/average.csv";
+        String outFilePath = "./data/average_2.csv";
         //CsvReader csvFile = env.readCsvFile(inFilePath);
         DataStream<String> dataStream = env.readTextFile(inFilePath);
 
@@ -169,10 +171,10 @@ public class Main {
             }
         }
 
-        // Apply windows
+        // Get all the reports for each car inside a Windows and apply the function
         SingleOutputStreamOperator<Tuple6<Integer, Integer, Integer, Integer, Integer, Double>> dataStreamOutAverageSpeed =
                 keyedStreamSegments5256
-                        .window(EventTimeSessionWindows.withGap(Time.seconds(91)))
+                        .window(EventTimeSessionWindows.withGap(Time.seconds(120)))
                         .apply(new AverageSpeed());
 
         // For checking cars
