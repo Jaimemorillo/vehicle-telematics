@@ -27,13 +27,17 @@ public class Main {
 
         // Set up the execution environment
         final StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+        env.setParallelism(3);
         env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime);
 
         //data/sample-traffic-3xways.csv
         //System.out.println("Working Directory = " + System.getProperty("user.dir"));
 
         String inFilePath = "./data/sample-traffic-3xways.csv";
-        String outFilePath = "./data/accident.csv";
+        String outFilePathSpeedRadar = "./data/speedfines.csv";
+        String outFilePathAverageSpeed = "./data/avgspeedfines.csv";
+        String outFilePathAccident = "./data/accidents.csv";
+
         DataStream<String> dataStream = env.readTextFile(inFilePath);
 
         int Timestamp = 0;
@@ -179,8 +183,9 @@ public class Main {
         /////// AccidentReporter //////////
         ///////////////////////////////////
 
-        DataStream<String> dataStream2 = env.readTextFile(inFilePath).setParallelism(1);
-        // DataStream to Tuple
+        // Set Parallelism to 1 for keeping the order of the reports and read again the source
+        env.setParallelism(1);
+        DataStream<String> dataStream2 = env.readTextFile(inFilePath);
         SingleOutputStreamOperator<Tuple8<Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer>> dataStreamTuple2 = dataStream2.map(
                 new MapFunction<String, Tuple8<Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer>>() {
                     @Override
@@ -197,7 +202,7 @@ public class Main {
                                         Integer.parseInt(fieldArray[7]));
                         return out;
                     }
-                }).setParallelism(1);
+                });
 
         // Filter stopped cars
         SingleOutputStreamOperator<Tuple8<Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer>> stoppedCarsIni =
@@ -213,7 +218,7 @@ public class Main {
 
         // Create the key taking into account VID, XWay, Dir, Seg and Pos; Generate timestamps and watermarks
         KeyedStream<Tuple6<Integer, Integer, Integer, Integer, Integer, Integer>, Tuple5<Integer,Integer,Integer,Integer,Integer>> keyedStreamstoppedCars =
-                stoppedCars.setParallelism(1).keyBy(new KeySelector<Tuple6<Integer, Integer, Integer, Integer, Integer, Integer>, Tuple5<Integer, Integer, Integer,Integer,Integer>>() {
+                stoppedCars.keyBy(new KeySelector<Tuple6<Integer, Integer, Integer, Integer, Integer, Integer>, Tuple5<Integer, Integer, Integer,Integer,Integer>>() {
                     @Override
                     public Tuple5<Integer, Integer, Integer, Integer, Integer> getKey(Tuple6<Integer, Integer, Integer, Integer, Integer, Integer> value) throws Exception {
                         return Tuple5.of(value.f1,value.f2,value.f3,value.f4,value.f5);
@@ -248,7 +253,6 @@ public class Main {
                     }
                     i++;
                 }
-
                 if (i==4) {
                     out.collect(new Tuple7<Integer, Integer, Integer, Integer, Integer, Integer, Integer>
                             (timeMin,timeMax,key.f0,key.f1,key.f3,key.f2,key.f4));
@@ -267,7 +271,7 @@ public class Main {
                 stoppedCars.filter(new FilterFunction<Tuple6<Integer, Integer, Integer, Integer, Integer, Integer>>() {
                     @Override
                     public boolean filter(Tuple6<Integer, Integer, Integer, Integer, Integer, Integer> in) throws Exception {
-                        return in.f1 == 237579; }
+                        return in.f1 == 26; }
                 });
 
         SingleOutputStreamOperator<Tuple6<Integer, Integer, Integer, Integer, Integer, Double>> averageSpeedF =
@@ -277,12 +281,13 @@ public class Main {
                         return in.f2 == 196144; }
                 });
 
-        //dataStreamOutAverageSpeed.print();
+        dataStreamF.print();
 
         // Write outputs
         env.setParallelism(1);
-        dataStreamOutAccident.writeAsCsv(outFilePath, FileSystem.WriteMode.OVERWRITE);
-
+        dataStreamOutSpeedRadar.writeAsCsv(outFilePathSpeedRadar, FileSystem.WriteMode.OVERWRITE);
+        dataStreamOutAverageSpeed.writeAsCsv(outFilePathAverageSpeed, FileSystem.WriteMode.OVERWRITE);
+        dataStreamOutAccident.writeAsCsv(outFilePathAccident, FileSystem.WriteMode.OVERWRITE);
 
         try {
             env.execute("Vehicule Telematics");
