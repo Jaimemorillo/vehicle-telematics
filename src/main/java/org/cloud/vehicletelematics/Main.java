@@ -182,7 +182,7 @@ public class Main {
         ///////////////////////////////////
 
         // Parallelism=1 to keep the order of the reports inside the following operations
-        // (With Parallelism=3 we get some accidents from no consecutive times)
+        // (With Parallelism=3 we get few accidents from no consecutive times)
         env.setParallelism(1);
 
         // Read again from source (to avoid issues with previous WaterMarks, why the conflict¿?)
