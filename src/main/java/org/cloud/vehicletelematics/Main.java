@@ -19,8 +19,6 @@ import org.apache.flink.streaming.api.windowing.windows.TimeWindow;
 import org.apache.flink.util.Collector;
 import java.util.Iterator;
 
-// https://nightlies.apache.org/flink/flink-docs-release-1.14/docs/dev/datastream/operators/overview/
-
 public class Main {
 
     public static void main(String[] args) throws Exception {
@@ -30,15 +28,11 @@ public class Main {
         env.setParallelism(3);
         env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime);
 
-        //data/sample-traffic-3xways.csv
-        //System.out.println("Working Directory = " + System.getProperty("user.dir"));
-
+        // File names and paths
         String inFilePath = "./data/sample-traffic-3xways.csv";
         String outFilePathSpeedRadar = "./data/speedfines.csv";
         String outFilePathAverageSpeed = "./data/avgspeedfines.csv";
         String outFilePathAccident = "./data/accidents.csv";
-
-        DataStream<String> dataStream = env.readTextFile(inFilePath);
 
         int Timestamp = 0;
         int VID = 1;
@@ -48,6 +42,9 @@ public class Main {
         int Dir = 5;
         int Seg = 6;
         int Pos = 7;
+
+        // Read from source
+        DataStream<String> dataStream = env.readTextFile(inFilePath);
 
         // DataStream to Tuple
         SingleOutputStreamOperator<Tuple8<Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer>> dataStreamTuple = dataStream.map(
@@ -101,6 +98,7 @@ public class Main {
                 segment5256Ini.project(Timestamp,VID,XWay,Dir,Seg,Pos);
 
         // Create the key taking into account VID, XWay and Dir; Generate timestamps and watermarks
+        // We avoid failing reports from other sensors in a different XWay or Dir
         KeyedStream<Tuple6<Integer, Integer, Integer, Integer, Integer, Integer>, Tuple3<Integer, Integer, Integer>> keyedStreamSegments5256 =
                 segments5256.assignTimestampsAndWatermarks(new AscendingTimestampExtractor<Tuple6<Integer, Integer, Integer, Integer, Integer, Integer>>(){
                     @Override
@@ -180,11 +178,14 @@ public class Main {
                         .apply(new AverageSpeed());
 
         ///////////////////////////////////
-        /////// AccidentReporter //////////
+        ///////// AccidentReporter ////////
         ///////////////////////////////////
 
-        // Set Parallelism to 1 for keeping the order of the reports and read again the source
+        // Parallelism=1 to keep the order of the reports inside the following operations
+        // (With Parallelism=3 we get some accidents from no consecutive times)
         env.setParallelism(1);
+
+        // Read again from source (to avoid issues with previous WaterMarks, why the conflict¿?)
         DataStream<String> dataStream2 = env.readTextFile(inFilePath);
         SingleOutputStreamOperator<Tuple8<Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer>> dataStreamTuple2 = dataStream2.map(
                 new MapFunction<String, Tuple8<Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer>>() {
@@ -217,22 +218,28 @@ public class Main {
                 stoppedCarsIni.project(Timestamp,VID,XWay,Dir,Seg,Pos);
 
         // Create the key taking into account VID, XWay, Dir, Seg and Pos; Generate timestamps and watermarks
+        // We avoid failing reports from other sensors in a different XWay, Dir, Seg or Pos
         KeyedStream<Tuple6<Integer, Integer, Integer, Integer, Integer, Integer>, Tuple5<Integer,Integer,Integer,Integer,Integer>> keyedStreamstoppedCars =
-                stoppedCars.keyBy(new KeySelector<Tuple6<Integer, Integer, Integer, Integer, Integer, Integer>, Tuple5<Integer, Integer, Integer,Integer,Integer>>() {
+                stoppedCars.assignTimestampsAndWatermarks(new AscendingTimestampExtractor<Tuple6<Integer, Integer, Integer, Integer, Integer, Integer>>(){
+                    @Override
+                    public long extractAscendingTimestamp(Tuple6<Integer, Integer, Integer, Integer, Integer, Integer> element) {
+                        return element.f0*1000;
+                    }
+                }).keyBy(new KeySelector<Tuple6<Integer, Integer, Integer, Integer, Integer, Integer>, Tuple5<Integer, Integer, Integer,Integer,Integer>>() {
                     @Override
                     public Tuple5<Integer, Integer, Integer, Integer, Integer> getKey(Tuple6<Integer, Integer, Integer, Integer, Integer, Integer> value) throws Exception {
                         return Tuple5.of(value.f1,value.f2,value.f3,value.f4,value.f5);
                     }
                 });
 
-        // Custom window function for average speed
+        // Custom window function for getting the accidents
         class Accident implements WindowFunction<Tuple6<Integer, Integer, Integer, Integer, Integer, Integer>,
                 Tuple7<Integer, Integer, Integer, Integer, Integer, Integer, Integer>,
                 Tuple5<Integer, Integer, Integer, Integer, Integer>,
                 GlobalWindow> {
             @Override
             public void apply(Tuple5<Integer, Integer, Integer, Integer, Integer> key,
-                              GlobalWindow globalWindow,
+                              GlobalWindow window,
                               Iterable<Tuple6<Integer, Integer, Integer, Integer, Integer, Integer>> input,
                               Collector<Tuple7<Integer, Integer, Integer, Integer, Integer, Integer, Integer>> out) throws Exception {
 
@@ -242,6 +249,7 @@ public class Main {
                 int timeMax = 0;
                 int i = 0;
 
+                // Count the number of reports inside the windows (sometimes the reports are less than 4)
                 while(iterator.hasNext()){
                     Tuple6<Integer, Integer, Integer, Integer, Integer, Integer> next = iterator.next();
                     int ntime = next.f0;
@@ -253,20 +261,26 @@ public class Main {
                     }
                     i++;
                 }
-                if (i==4) {
+
+                // Check if the reports are 4 and also consecutive (Time2 - Time1 = 90s)
+                if ((i==4) && (timeMax-timeMin==90)) {
                     out.collect(new Tuple7<Integer, Integer, Integer, Integer, Integer, Integer, Integer>
                             (timeMin,timeMax,key.f0,key.f1,key.f3,key.f2,key.f4));
                 }
             }
         }
 
-        // Get all the reports inside windows of 4 elements with sliding and apply the function
+        // Get all the reports inside windows of 4 elements with overlapping and apply the function
         SingleOutputStreamOperator<Tuple7<Integer, Integer, Integer, Integer, Integer, Integer, Integer>> dataStreamOutAccident =
                 keyedStreamstoppedCars
                         .countWindow(4, 1)
                         .apply(new Accident());
 
-        // For checking cars
+        ///////////////////////////////////
+        /////// Tests /////////////////////
+        ///////////////////////////////////
+
+        // For checking some cars
         SingleOutputStreamOperator<Tuple6<Integer, Integer, Integer, Integer, Integer, Integer>> dataStreamF =
                 stoppedCars.filter(new FilterFunction<Tuple6<Integer, Integer, Integer, Integer, Integer, Integer>>() {
                     @Override
@@ -281,9 +295,12 @@ public class Main {
                         return in.f2 == 196144; }
                 });
 
-        dataStreamF.print();
+        //dataStreamF.print();
 
-        // Write outputs
+        ///////////////////////////////////
+        //////////// Outputs //////////////
+        ///////////////////////////////////
+
         env.setParallelism(1);
         dataStreamOutSpeedRadar.writeAsCsv(outFilePathSpeedRadar, FileSystem.WriteMode.OVERWRITE);
         dataStreamOutAverageSpeed.writeAsCsv(outFilePathAverageSpeed, FileSystem.WriteMode.OVERWRITE);
