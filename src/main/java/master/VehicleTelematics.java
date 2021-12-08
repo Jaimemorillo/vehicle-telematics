@@ -1,4 +1,4 @@
-package org.cloud.vehicletelematics;
+package master;
 
 import org.apache.flink.api.common.functions.FilterFunction;
 import org.apache.flink.api.common.functions.MapFunction;
@@ -19,7 +19,7 @@ import org.apache.flink.streaming.api.windowing.windows.TimeWindow;
 import org.apache.flink.util.Collector;
 import java.util.Iterator;
 
-public class Main {
+public class VehicleTelematics {
 
     public static void main(String[] args) throws Exception {
 
