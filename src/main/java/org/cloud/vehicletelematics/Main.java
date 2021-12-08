@@ -25,14 +25,16 @@ public class Main {
 
         // Set up the execution environment
         final StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+
+        //Optimize the program for 3 task manager slots
         env.setParallelism(3);
         env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime);
 
         // File names and paths
-        String inFilePath = "./data/sample-traffic-3xways.csv";
-        String outFilePathSpeedRadar = "./data/speedfines.csv";
-        String outFilePathAverageSpeed = "./data/avgspeedfines.csv";
-        String outFilePathAccident = "./data/accidents.csv";
+        String inFilePath = "/Users/jaimemorilloleal/IdeaProjects/vehicle-telematics/data/sample-traffic-3xways.csv";
+        String outFilePathSpeedRadar = "/Users/jaimemorilloleal/IdeaProjects/vehicle-telematics/data/speedfines.csv";
+        String outFilePathAverageSpeed = "/Users/jaimemorilloleal/IdeaProjects/vehicle-telematics/data/avgspeedfines.csv";
+        String outFilePathAccident = "/Users/jaimemorilloleal/IdeaProjects/vehicle-telematics/data/accidents.csv";
 
         int Timestamp = 0;
         int VID = 1;
@@ -43,31 +45,31 @@ public class Main {
         int Seg = 6;
         int Pos = 7;
 
+        ///////////////////////////////////
+        /////////// SpeedRadar ////////////
+        ///////////////////////////////////
+
         // Read from source
         DataStream<String> dataStream = env.readTextFile(inFilePath);
 
         // DataStream to Tuple
         SingleOutputStreamOperator<Tuple8<Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer>> dataStreamTuple = dataStream.map(
                 new MapFunction<String, Tuple8<Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer>>() {
-            @Override
-            public Tuple8<Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer> map(String in) throws Exception {
-                String[] fieldArray = in.split(",");
-                Tuple8<Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer> out =
-                        new Tuple8(Integer.parseInt(fieldArray[0]),
-                        Integer.parseInt(fieldArray[1]),
-                        Integer.parseInt(fieldArray[2]),
-                        Integer.parseInt(fieldArray[3]),
-                        Integer.parseInt(fieldArray[4]),
-                        Integer.parseInt(fieldArray[5]),
-                        Integer.parseInt(fieldArray[6]),
-                        Integer.parseInt(fieldArray[7]));
-                return out;
-            }
-        });
-
-        ///////////////////////////////////
-        /////////// SpeedRadar ////////////
-        ///////////////////////////////////
+                    @Override
+                    public Tuple8<Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer> map(String in) throws Exception {
+                        String[] fieldArray = in.split(",");
+                        Tuple8<Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer> out =
+                                new Tuple8(Integer.parseInt(fieldArray[0]),
+                                        Integer.parseInt(fieldArray[1]),
+                                        Integer.parseInt(fieldArray[2]),
+                                        Integer.parseInt(fieldArray[3]),
+                                        Integer.parseInt(fieldArray[4]),
+                                        Integer.parseInt(fieldArray[5]),
+                                        Integer.parseInt(fieldArray[6]),
+                                        Integer.parseInt(fieldArray[7]));
+                        return out;
+                    }
+                });
 
         // Filter reports with more than 90 mph
         SingleOutputStreamOperator<Tuple8<Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer>> dataStreamFilter =
@@ -85,9 +87,29 @@ public class Main {
         /////// AverageSpeedControl ///////
         ///////////////////////////////////
 
+        // Read again from source (the following filter overlaps with previous one)
+        DataStream<String> dataStream2 = env.readTextFile(inFilePath);
+        SingleOutputStreamOperator<Tuple8<Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer>> dataStreamTuple2 = dataStream2.map(
+                new MapFunction<String, Tuple8<Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer>>() {
+                    @Override
+                    public Tuple8<Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer> map(String in) throws Exception {
+                        String[] fieldArray = in.split(",");
+                        Tuple8<Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer> out =
+                                new Tuple8(Integer.parseInt(fieldArray[0]),
+                                        Integer.parseInt(fieldArray[1]),
+                                        Integer.parseInt(fieldArray[2]),
+                                        Integer.parseInt(fieldArray[3]),
+                                        Integer.parseInt(fieldArray[4]),
+                                        Integer.parseInt(fieldArray[5]),
+                                        Integer.parseInt(fieldArray[6]),
+                                        Integer.parseInt(fieldArray[7]));
+                        return out;
+                    }
+                });
+
         // Filter reports inside segments 52 and 56
         SingleOutputStreamOperator<Tuple8<Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer>> segment5256Ini =
-                dataStreamTuple.filter(new FilterFunction<Tuple8<Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer>>() {
+                dataStreamTuple2.filter(new FilterFunction<Tuple8<Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer>>() {
             @Override
             public boolean filter(Tuple8<Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer> in) throws Exception {
                 return in.f6 >= 52 && in.f6 <= 56;}
@@ -181,13 +203,13 @@ public class Main {
         ///////// AccidentReporter ////////
         ///////////////////////////////////
 
-        // Parallelism=1 to keep the order of the reports inside the following operations
-        // (With Parallelism=3 we get few accidents from no consecutive times)
+        // Parallelism=1 to keep the order of the reports (With Parallelism=3 we get some non-consecutive time accidents)
         env.setParallelism(1);
 
-        // Read again from source (to avoid issues with previous WaterMarks, why the conflict¿?)
-        DataStream<String> dataStream2 = env.readTextFile(inFilePath);
-        SingleOutputStreamOperator<Tuple8<Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer>> dataStreamTuple2 = dataStream2.map(
+        // Read again from source (to avoid issues with previous WaterMarks and filter overlap, why the conflict¿?)
+        DataStream<String> dataStream3 = env.readTextFile(inFilePath);
+
+        SingleOutputStreamOperator<Tuple8<Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer>> dataStreamTuple3 = dataStream3.map(
                 new MapFunction<String, Tuple8<Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer>>() {
                     @Override
                     public Tuple8<Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer> map(String in) throws Exception {
@@ -207,7 +229,7 @@ public class Main {
 
         // Filter stopped cars
         SingleOutputStreamOperator<Tuple8<Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer>> stoppedCarsIni =
-                dataStreamTuple2.filter(new FilterFunction<Tuple8<Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer>>() {
+                dataStreamTuple3.filter(new FilterFunction<Tuple8<Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer>>() {
                     @Override
                     public boolean filter(Tuple8<Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer> in) throws Exception {
                         return in.f2==0;}
@@ -231,6 +253,9 @@ public class Main {
                         return Tuple5.of(value.f1,value.f2,value.f3,value.f4,value.f5);
                     }
                 });
+
+        // Setting Parallelism again to 3 to increase performance
+        env.setParallelism(3);
 
         // Custom window function for getting the accidents
         class Accident implements WindowFunction<Tuple6<Integer, Integer, Integer, Integer, Integer, Integer>,
@@ -275,27 +300,6 @@ public class Main {
                 keyedStreamstoppedCars
                         .countWindow(4, 1)
                         .apply(new Accident());
-
-        ///////////////////////////////////
-        /////// Tests /////////////////////
-        ///////////////////////////////////
-
-        // For checking some cars
-        SingleOutputStreamOperator<Tuple6<Integer, Integer, Integer, Integer, Integer, Integer>> dataStreamF =
-                stoppedCars.filter(new FilterFunction<Tuple6<Integer, Integer, Integer, Integer, Integer, Integer>>() {
-                    @Override
-                    public boolean filter(Tuple6<Integer, Integer, Integer, Integer, Integer, Integer> in) throws Exception {
-                        return in.f1 == 26; }
-                });
-
-        SingleOutputStreamOperator<Tuple6<Integer, Integer, Integer, Integer, Integer, Double>> averageSpeedF =
-                dataStreamOutAverageSpeed.filter(new FilterFunction<Tuple6<Integer, Integer, Integer, Integer, Integer, Double>>() {
-                    @Override
-                    public boolean filter(Tuple6<Integer, Integer, Integer, Integer, Integer, Double> in) throws Exception {
-                        return in.f2 == 196144; }
-                });
-
-        //dataStreamF.print();
 
         ///////////////////////////////////
         //////////// Outputs //////////////
