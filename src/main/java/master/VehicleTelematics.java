@@ -23,19 +23,21 @@ public class VehicleTelematics {
 
     public static void main(String[] args) throws Exception {
 
-        // Set up the execution environment
-        final StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+        //Get args
+        if (args.length < 2) {
+            System.out.println("You need 2 args with input file and output folder");
+            System.exit(1);
+        }
 
-        //Optimize the program for 3 task manager slots
-        env.setParallelism(3);
-        env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime);
+        String inFilePath = args[0];
+        String outFolder = args[1];
 
         // File names and paths
-        String inFilePath = "/Users/jaimemorilloleal/IdeaProjects/vehicle-telematics/data/sample-traffic-3xways.csv";
-        String outFilePathSpeedRadar = "/Users/jaimemorilloleal/IdeaProjects/vehicle-telematics/data/speedfines.csv";
-        String outFilePathAverageSpeed = "/Users/jaimemorilloleal/IdeaProjects/vehicle-telematics/data/avgspeedfines.csv";
-        String outFilePathAccident = "/Users/jaimemorilloleal/IdeaProjects/vehicle-telematics/data/accidents.csv";
+        String outFilePathSpeedRadar = outFolder + "/speedfines.csv";
+        String outFilePathAverageSpeed = outFolder + "/avgspeedfines.csv";
+        String outFilePathAccident = outFolder + "/accidents.csv";
 
+        // Variables
         int Timestamp = 0;
         int VID = 1;
         int Spd = 2;
@@ -44,6 +46,13 @@ public class VehicleTelematics {
         int Dir = 5;
         int Seg = 6;
         int Pos = 7;
+
+        // Set up the execution environment
+        final StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+
+        //Optimize the program for 3 task manager slots
+        env.setParallelism(3);
+        env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime);
 
         ///////////////////////////////////
         /////////// SpeedRadar ////////////
